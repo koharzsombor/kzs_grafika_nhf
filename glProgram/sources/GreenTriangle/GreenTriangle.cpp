@@ -197,6 +197,12 @@ const mat4 IDENTITY = mat4(
 	0, 0, 0, 1
 );
 
+const mat3 IDENTITY3D = mat3(
+	1, 0, 0,
+	0, 1, 0,
+	0, 0, 1
+);
+
 const int waveCount = 32;
 
 struct Material {
@@ -293,9 +299,11 @@ public:
 
 			std::string index = "[" + std::to_string(i) + "]";
 
-			printf("%f, %f\n", dir.x, dir.y);
 			setUniform(phase, "phase" + index);
 			setUniform(dir, "direction" + index);
+
+			phases[i] = phase;
+			directions[i] = dir;
 		}
 	}
 
@@ -317,7 +325,7 @@ public:
 		float dzSum = 0.0;
 
 		for (int i = 0; i < waveCount; ++i) {
-			float wavePhase = dot(vec2(wP.x, wP.z), directions[i]) * currentFrequency + t * phases[i];
+			float wavePhase = dot(vec2(wP.x, wP.z), directions[i]) * currentFrequency + t / 10 * phases[i];
 
 			float fx = currentAplitude * exp(sin(wavePhase) - 1);
 			float dx = currentFrequency * directions[i].x * fx * cos(wavePhase);
@@ -490,10 +498,87 @@ public:
 	}
 };
 
+struct PhysicsObject {
+	virtual void Simulate(float dt) = 0;
+};
+
+class Movable {
+protected:
+	vec3 position;
+	vec3 rotations;
+
+	mat4 M() const {
+		mat4 RotateX(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, cosf(rotations.x), -sinf(rotations.x), 0.0f,
+			0.0f, sinf(rotations.x), cosf(rotations.x), 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+		mat4 RotateY(
+			cosf(rotations.y), 0.0f, sinf(rotations.y), 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			-sinf(rotations.y), 0.0f, cosf(rotations.y), 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+		mat4 RotateZ(
+			cosf(rotations.z), -sinf(rotations.z), 0.0f, 0.0f,
+			sinf(rotations.z), cosf(rotations.z), 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+
+		mat4 Translate = translate(position);
+
+		return Translate * RotateZ * RotateY * RotateX;
+	}
+
+	mat4 MInv() const {
+		mat4 InverseRotateX(
+			1.0f, 0.0f, 0.0f, 0.0f,
+			0.0f, cosf(rotations.x), sinf(rotations.x), 0.0f,
+			0.0f, -sinf(rotations.x), cosf(rotations.x), 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+
+		mat4 InverseRotateY(
+			cosf(rotations.y), 0.0f, -sinf(rotations.y), 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			sinf(rotations.y), 0.0f, cosf(rotations.y), 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+
+		mat4 InverseRotateZ(
+			cosf(rotations.z), sinf(rotations.z), 0.0f, 0.0f,
+			-sinf(rotations.z), cosf(rotations.z), 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+
+		mat4 InverseTranslate = translate(-position);
+
+		return InverseRotateX * InverseRotateY * InverseRotateZ * InverseTranslate;
+	}
+
+	void SetModelingTransformation(RenderState& state) {
+		state.M = M();
+		state.Minv = MInv();
+	}
+public:
+	Movable(const vec3& pos) : position(pos), rotations(0, 0, 0) {}
+
+	void Move(const vec3& vector) {
+		position += vector;
+	}
+
+	void Rotate(const vec3& amount) {
+		rotations += amount;
+	}
+};
+
 class BuoyVoxel {
-	float volume;
+	float volume; //magyar neve: térfogat
 	float a;
-	float m;
+	float m; //magyar neve: tömeg
 	vec3 position, centerOfMass;
 	int voxelCount;
 public:
@@ -501,7 +586,7 @@ public:
 		volume = a * a * a;
 	}
 
-	void simulate(const mat4& M, vec3& force, vec3& torque) {
+	void simulate(const mat4& M, vec3& force, vec3& torque) const {
 		vec3 wPos;
 
 		WaterShader* waterShader = WaterSurface::shader;
@@ -523,26 +608,21 @@ public:
 
 		float wtr = waterPercent * volume;
 
-		force = waterNormal * ((wtr * ro * g) - (m * g));
-		torque = cross(force, position - centerOfMass);
+		force = waterNormal * ((wtr * ro * g) - (m * g)); //magyar neve: felható erõ
+		torque = cross(force, position - centerOfMass); //magyar neve: forgató nyomaték
 	}
 };
 
-class BuoyCube {
+class BuoyCube : public PhysicsObject, public Movable {
 	float volume;
 	float m;
 	float a;
 	float numOfVoxels;
-	vec3 position;
 	std::vector<BuoyVoxel> voxels;
-	mat4 I;
-
-	float V() {
-		return 0.0f;
-	}
+	mat3 invI; //magyar neve: Inverz tehetetlenségi tenzor
 
 public:
-	BuoyCube(const vec3& pos, float sideLength, int voxelCount, float mass) : position(pos), a(sideLength), numOfVoxels(voxelCount), m(mass) {
+	BuoyCube(const vec3& pos, float sideLength, int voxelCount, float mass) : a(sideLength), numOfVoxels(voxelCount), m(mass), Movable(pos) {
 		vec3 bottomCorner = vec3(-1, -1, -1) * (sideLength / 2.0f);
 		float voxelSize = sideLength / (float)voxelCount;
 		vec3 voxelStart = bottomCorner + vec3(voxelSize / 2.0f, voxelSize / 2.0f, voxelSize / 2.0f);
@@ -558,10 +638,24 @@ public:
 				}
 			}
 		}
+
+		invI = IDENTITY3D * (6.0f / (m * a * a));
 	}
 
-	float v() {
-		return ro * V() * g - (m * g);
+	// Inherited via PhysicsObject
+	void Simulate(float dt) override {
+		vec3 force(0);
+		vec3 torque(0);
+
+		for (const BuoyVoxel& bouyVoxel : voxels) {
+			vec3 buoyForce(0);
+			vec3 buoyTorque(0);
+
+			bouyVoxel.simulate(M(), buoyForce, buoyTorque);
+
+			force += buoyForce;
+			torque += buoyTorque;
+		}
 	}
 };
 
@@ -666,9 +760,6 @@ public:
 			scene->RoateCamera(M_PI / 40.0f);
 			refreshScreen();
 			break;
-		case 's':
-			scene->Animate(M_PI / 4.0f);
-			refreshScreen();
 		default:
 			break;
 		}
