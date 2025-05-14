@@ -197,6 +197,8 @@ const mat4 IDENTITY = mat4(
 	0, 0, 0, 1
 );
 
+const int waveCount = 32;
+
 struct Material {
 	vec3 kd = vec3(1, 1, 1), ks = vec3(0, 0, 0), ka = vec3(1, 1, 1);
 	float shininess = 1, emission = 0;
@@ -256,8 +258,9 @@ public:
 */
 class WaterShader : public GPUProgram {
 	float t = 0;
-	static const int waveCount = 32;
 
+	float phases[waveCount];
+	vec2 directions[waveCount];
 	const float medianWavelength = 1.0f;
 	const float wavelengthRange = 1.0f;
 	const float medianDirection = 0.0f;
@@ -294,6 +297,42 @@ public:
 			setUniform(phase, "phase" + index);
 			setUniform(dir, "direction" + index);
 		}
+	}
+
+	//cpu simulation
+	void getWater(const vec3& wP, vec3& P, vec3& N) const {
+		const float startingFrequency = 0.9;
+		const float startingAmplitude = 0.7;
+
+		const float amplitudeDelta = 0.72; // Minden esetben 0 < x < 1
+		const float frequencyDelta = 1.18; // Minden esetben 1 < x
+
+		float height = 0.0;
+
+		float currentFrequency = startingFrequency;
+		float currentAplitude = startingAmplitude;
+		float fxSum = 0.0;
+
+		float dxSum = 0.0;
+		float dzSum = 0.0;
+
+		for (int i = 0; i < waveCount; ++i) {
+			float wavePhase = dot(vec2(wP.x, wP.z), directions[i]) * currentFrequency + t * phases[i];
+
+			float fx = currentAplitude * exp(sin(wavePhase) - 1);
+			float dx = currentFrequency * directions[i].x * fx * cos(wavePhase);
+			float dz = currentFrequency * fx * cos(wavePhase) * directions[i].y;
+
+			fxSum += fx;
+			dxSum += dx;
+			dzSum += dz;
+
+			currentFrequency *= frequencyDelta;
+			currentAplitude *= amplitudeDelta;
+		}
+
+		P = vec3(wP.x, fxSum, wP.z);
+		N = normalize(vec3(-dxSum, 1.0, -dzSum));
 	}
 
 	void Bind(RenderState state) {
@@ -389,62 +428,6 @@ public:
 	}
 };
 
-class RigidBody {
-public:
-	vec3 velocity;
-	vec3
-};
-
-class BuoyVoxel {
-	float volume;
-	float a;
-	vec3 position;
-public:
-	BuoyVoxel(const vec3& pos, float sideLength) : position(pos), a(sideLength) {
-		volume = a * a * a;
-	}
-
-	vec3 getForce() {
-		return vec3(0, 0, 0);
-	}
-};
-
-class BuoyCube {
-	float volume;
-	float m;
-	float a;
-	float numOfVoxels;
-	vec3 position;
-	std::vector<BuoyVoxel> voxels;
-
-	float V() {
-		return 0.0f;
-	}
-
-public:
-	BuoyCube(const vec3& pos, float sideLength, int voxelCount, float mass) : position(pos), a(sideLength), numOfVoxels(voxelCount), m(mass) {
-		vec3 bottomCorner = vec3(-1, -1, -1) * (sideLength / 2.0f);
-		float voxelSize = sideLength / (float)voxelCount;
-		vec3 voxelStart = bottomCorner + vec3(voxelSize / 2.0f, voxelSize / 2.0f, voxelSize / 2.0f);
-
-		for (int i = 0; i < voxelCount; i++)
-		{
-			for (int j = 0; j < voxelCount; j++)
-			{
-				for (int k = 0; k < voxelCount; k++)
-				{
-					vec3 voxelPos = voxelStart + vec3(i * voxelSize, j * voxelSize, k * voxelSize);
-					voxels.push_back(BuoyVoxel(voxelPos, voxelSize));
-				}
-			}
-		}
-	}
-
-	float v() {
-		return ro * V() * g - (m * g);
-	}
-};
-
 //---------------------------
 class ParamSurface : public Mesh {
 	//---------------------------
@@ -489,7 +472,7 @@ public:
 
 		return vd;
 	}
-	 
+
 	void SetModelingTransformation(RenderState& state) {
 		state.M = IDENTITY; //translate(position);
 		state.Minv = IDENTITY;//translate(-position);
@@ -504,6 +487,81 @@ public:
 
 	void Animate(float dt) {
 		shader->SetTime(dt);
+	}
+};
+
+class BuoyVoxel {
+	float volume;
+	float a;
+	float m;
+	vec3 position, centerOfMass;
+	int voxelCount;
+public:
+	BuoyVoxel(const vec3& pos, float sideLength) : position(pos), a(sideLength) {
+		volume = a * a * a;
+	}
+
+	void simulate(const mat4& M, vec3& force, vec3& torque) {
+		vec3 wPos;
+
+		WaterShader* waterShader = WaterSurface::shader;
+
+		vec3 waterPos;
+		vec3 waterNormal;
+
+		waterShader->getWater(wPos, waterPos, waterNormal);
+		float bottom = wPos.y - a / 2.0f;
+		float waterDifference = bottom - waterPos.y;
+		float waterPercent = waterDifference / a;
+
+		if (waterPercent > 1.0f) {
+			waterPercent = 1.0f;
+		}
+		else if (waterPercent < 0.0f) {
+			waterPercent = 0.0f;
+		}
+
+		float wtr = waterPercent * volume;
+
+		force = waterNormal * ((wtr * ro * g) - (m * g));
+		torque = cross(force, position - centerOfMass);
+	}
+};
+
+class BuoyCube {
+	float volume;
+	float m;
+	float a;
+	float numOfVoxels;
+	vec3 position;
+	std::vector<BuoyVoxel> voxels;
+	mat4 I;
+
+	float V() {
+		return 0.0f;
+	}
+
+public:
+	BuoyCube(const vec3& pos, float sideLength, int voxelCount, float mass) : position(pos), a(sideLength), numOfVoxels(voxelCount), m(mass) {
+		vec3 bottomCorner = vec3(-1, -1, -1) * (sideLength / 2.0f);
+		float voxelSize = sideLength / (float)voxelCount;
+		vec3 voxelStart = bottomCorner + vec3(voxelSize / 2.0f, voxelSize / 2.0f, voxelSize / 2.0f);
+
+		for (int i = 0; i < voxelCount; i++)
+		{
+			for (int j = 0; j < voxelCount; j++)
+			{
+				for (int k = 0; k < voxelCount; k++)
+				{
+					vec3 voxelPos = voxelStart + vec3(i * voxelSize, j * voxelSize, k * voxelSize);
+					voxels.push_back(BuoyVoxel(voxelPos, voxelSize));
+				}
+			}
+		}
+	}
+
+	float v() {
+		return ro * V() * g - (m * g);
 	}
 };
 
@@ -561,7 +619,7 @@ public:
 		surface->Draw(state);
 	}
 
-	void Animate(float dt) { 
+	void Animate(float dt) {
 		surface->Animate(dt);
 	}
 
@@ -575,7 +633,7 @@ WaterShader* WaterSurface::shader;
 class Waterloo : public glApp {
 	Scene* scene;
 public:
-	Waterloo() : glApp("Waterloo") { }
+	Waterloo() : glApp("Waterloo") {}
 
 	// Inicializáció, 
 	void onInitialization() {
