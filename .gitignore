@@ -18,7 +18,6 @@ x86/
 *.pdb
 *.idb
 *.ilk
-*.obj
 *.o
 CMakeFiles/
 CMakeCache.txt
