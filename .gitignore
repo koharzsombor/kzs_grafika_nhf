@@ -13,8 +13,6 @@ x86/
 *.userosscache
 *.sln.docstates
 *.exe
-*.dll
-*.lib
 *.pdb
 *.idb
 *.ilk
