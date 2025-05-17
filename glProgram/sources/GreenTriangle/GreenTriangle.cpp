@@ -5,9 +5,11 @@
 // https://developer.nvidia.com/gpugems/gpugems/part-i-natural-effects/chapter-1-effective-water-simulation-physical-models
 // https://www.youtube.com/watch?v=ja8yCvXzw2c
 // https://www.youtube.com/watch?v=PH9q0HNBjT4
+// 
+// Fizikához felhasznált forrás:
+// Ian Millington - Game Physics Engine Development
 //=============================================================================================
 #include "framework.h"
-
 
 const char* phongVertexSource = R"(
 	#version 330
@@ -29,7 +31,7 @@ const char* phongVertexSource = R"(
 	out vec2 texcoord;
 		
 	void main() {
-		gl_Position = MVP * vec4(vtxPos), 1); // to NDC
+		gl_Position = MVP * vec4(vtxPos, 1); // to NDC
 		vec4 wPos = M * vec4(vtxPos, 1);
 		wLight = light.wLightPos.xyz * wPos.w - wPos.xyz * light.wLightPos.w;
 		wView  = wEye.xyz * wPos.w - wPos.xyz;
@@ -63,7 +65,7 @@ const char* phongFragmentSource = R"(
 	void main() {
 		vec3 N = normalize(wNormal);
 		vec3 V = normalize(wView); 
-		vec3 texColor = vec3(1, 1, 1);
+		vec3 texColor = vec3(1, 1, 1);//texture(diffuseTexture, texcoord).rgb;
 		vec3 ka = material.ka * texColor;
 		vec3 kd = material.kd * texColor;
 		vec3 emission = material.emission * texColor;
@@ -109,8 +111,6 @@ const char* waterVertexSource = R"(
 	uniform vec2 direction[numOfWaves];
 
 	void main() {
-		float height = 0.0;
-
 		float currentFrequency = startingFrequency;
 		float currentAplitude = startingAmplitude;
 		float fxSum = 0.0;
@@ -188,7 +188,8 @@ const char* waterFragmentSource = R"(
 
 const int winWidth = 600, winHeight = 600;
 const float g = 9.8f;
-const float ro = 1.0f; //Víz
+const float ro = 1000.0f; //Víz
+const float Epsilon = 0.00001f;
 
 const mat4 IDENTITY = mat4(
 	1, 0, 0, 0,
@@ -234,10 +235,58 @@ struct VtxData {
 	vec2 texcoord;
 };
 
+struct Quaternion {
+	float r, i, j, k;
 
-//---------------------------
+	Quaternion(float real, float imaginary, float jimaginary, float kimaginary) : r(real), i(imaginary), j(jimaginary), k(kimaginary) {}
+
+	Quaternion operator*(const Quaternion& q) const {
+		return Quaternion(
+			r * q.r - i * q.i - j * q.j - k * q.k,
+			r * q.i + i * q.r + j * q.k - k * q.j,
+			r * q.j - i * q.k + j * q.r + k * q.i,
+			r * q.k + i * q.j - j * q.i + k * q.r
+		);
+	}
+
+	Quaternion operator+(const Quaternion& q) const {
+		return Quaternion(r + q.r, i + q.i, j + q.j, k + q.k);
+	}
+
+	Quaternion operator*(float s) const {
+		return Quaternion(r * s, i * s, j * s, k * s);
+	}
+
+	void normalize() {
+		float m = sqrtf(r * r + i * i + j * j + k * k);
+
+		if (m > Epsilon) {
+			r /= m;
+			i /= m;
+			j /= m;
+			k /= m;
+		}
+	}
+
+	mat4 toRotationMatrix() const {
+		return mat4(
+			1.0f - 2.0f * (j * j + k * k), 2.0f * (i * j - k * r), 2.0f * (i * k + j * r), 0.0f,
+			2.0f * (i * j + k * r), 1.0f - 2.0f * (i * i + k * k), 2.0f * (j * k - i * r), 0.0f,
+			2.0f * (i * k - j * r), 2.0f * (j * k + i * r), 1.0f - 2.0f * (i * i + j * j), 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		);
+	}
+
+	mat3 toRotationMatrix3D() const {
+		return mat3(
+			1.0f - 2.0f * (j * j + k * k), 2.0f * (i * j - k * r), 2.0f * (i * k + j * r),
+			2.0f * (i * j + k * r), 1.0f - 2.0f * (i * i + k * k), 2.0f * (j * k - i * r),
+			2.0f * (i * k - j * r), 2.0f * (j * k + i * r), 1.0f - 2.0f * (i * i + j * j)
+		);
+	}
+};
+
 class PhongShader : public GPUProgram {
-	//---------------------------
 public:
 	PhongShader() : GPUProgram(phongVertexSource, phongFragmentSource) {}
 
@@ -325,7 +374,7 @@ public:
 		float dzSum = 0.0;
 
 		for (int i = 0; i < waveCount; ++i) {
-			float wavePhase = dot(vec2(wP.x, wP.z), directions[i]) * currentFrequency + t / 10 * phases[i];
+			float wavePhase = dot(vec2(wP.x, wP.z), directions[i]) * currentFrequency + t * phases[i];
 
 			float fx = currentAplitude * exp(sin(wavePhase) - 1);
 			float dx = currentFrequency * directions[i].x * fx * cos(wavePhase);
@@ -360,8 +409,9 @@ public:
 	}
 
 	void SetTime(float dt) {
-		t += dt;
-		setUniform(t / 10, "t");
+		Use();
+		t += dt / 10.0f;
+		setUniform(t, "t");
 	}
 };
 
@@ -381,9 +431,7 @@ public:
 	}
 };
 
-//---------------------------
 class OBJSurface : public Mesh {
-	//---------------------------
 public:
 	OBJSurface(std::string pathname, float scale) {
 		std::vector<vec3> vertices, normals;
@@ -430,7 +478,7 @@ public:
 		read.close();
 		updateGPU();
 	}
-	void Draw(RenderState state) {
+	virtual void Draw(RenderState state) {
 		Bind();
 		glDrawArrays(GL_TRIANGLES, 0, vtx.size());
 	}
@@ -505,89 +553,42 @@ struct PhysicsObject {
 class Movable {
 protected:
 	vec3 position;
-	vec3 rotations;
+	Quaternion rotation;
 
 	mat4 M() const {
-		mat4 RotateX(
-			1.0f, 0.0f, 0.0f, 0.0f,
-			0.0f, cosf(rotations.x), -sinf(rotations.x), 0.0f,
-			0.0f, sinf(rotations.x), cosf(rotations.x), 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
-		mat4 RotateY(
-			cosf(rotations.y), 0.0f, sinf(rotations.y), 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			-sinf(rotations.y), 0.0f, cosf(rotations.y), 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
-		mat4 RotateZ(
-			cosf(rotations.z), -sinf(rotations.z), 0.0f, 0.0f,
-			sinf(rotations.z), cosf(rotations.z), 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
-
 		mat4 Translate = translate(position);
+		mat4 Rotate = rotation.toRotationMatrix();
 
-		return Translate * RotateZ * RotateY * RotateX;
+		return Translate * Rotate;
 	}
 
 	mat4 MInv() const {
-		mat4 InverseRotateX(
-			1.0f, 0.0f, 0.0f, 0.0f,
-			0.0f, cosf(rotations.x), sinf(rotations.x), 0.0f,
-			0.0f, -sinf(rotations.x), cosf(rotations.x), 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
-
-		mat4 InverseRotateY(
-			cosf(rotations.y), 0.0f, -sinf(rotations.y), 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			sinf(rotations.y), 0.0f, cosf(rotations.y), 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
-
-		mat4 InverseRotateZ(
-			cosf(rotations.z), sinf(rotations.z), 0.0f, 0.0f,
-			-sinf(rotations.z), cosf(rotations.z), 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		);
-
 		mat4 InverseTranslate = translate(-position);
+		mat4 InverseRotate = transpose(rotation.toRotationMatrix());
 
-		return InverseRotateX * InverseRotateY * InverseRotateZ * InverseTranslate;
+		return InverseRotate * InverseTranslate;
 	}
-
+	 
 	void SetModelingTransformation(RenderState& state) {
 		state.M = M();
 		state.Minv = MInv();
 	}
 public:
-	Movable(const vec3& pos) : position(pos), rotations(0, 0, 0) {}
-
-	void Move(const vec3& vector) {
-		position += vector;
-	}
-
-	void Rotate(const vec3& amount) {
-		rotations += amount;
-	}
+	Movable(const vec3& pos) : position(pos), rotation(1, 0, 0, 0) {}
 };
 
 class BuoyVoxel {
-	float volume; //magyar neve: térfogat
+	float volume;
 	float a;
-	float m; //magyar neve: tömeg
-	vec3 position, centerOfMass;
-	int voxelCount;
+	vec3 position;
 public:
 	BuoyVoxel(const vec3& pos, float sideLength) : position(pos), a(sideLength) {
 		volume = a * a * a;
 	}
 
-	void simulate(const mat4& M, vec3& force, vec3& torque) const {
-		vec3 wPos;
+	void simulate(const mat4& M, const vec3& wCOM , vec3& force, vec3& torque, bool stationary) const {
+		vec4 wP = M * vec4(position.x, position.y, position.z, 1);
+		vec3 wPos = vec3(wP.x, wP.y, wP.z);
 
 		WaterShader* waterShader = WaterSurface::shader;
 
@@ -596,7 +597,7 @@ public:
 
 		waterShader->getWater(wPos, waterPos, waterNormal);
 		float bottom = wPos.y - a / 2.0f;
-		float waterDifference = bottom - waterPos.y;
+		float waterDifference = waterPos.y - bottom;
 		float waterPercent = waterDifference / a;
 
 		if (waterPercent > 1.0f) {
@@ -608,8 +609,8 @@ public:
 
 		float wtr = waterPercent * volume;
 
-		force = waterNormal * ((wtr * ro * g) - (m * g)); //magyar neve: felható erõ
-		torque = cross(force, position - centerOfMass); //magyar neve: forgató nyomaték
+		force = stationary ? vec3(0, 1, 0) * (wtr * ro * g) : waterNormal * ((wtr * ro * g)); //magyar neve: felható erõ
+		torque = cross(force, wPos - wCOM); //magyar neve: forgató nyomaték
 	}
 };
 
@@ -620,8 +621,12 @@ class BuoyCube : public PhysicsObject, public Movable {
 	float numOfVoxels;
 	std::vector<BuoyVoxel> voxels;
 	mat3 invI; //magyar neve: Inverz tehetetlenségi tenzor
+	vec3 v = vec3(0); //magyar neve: sebesség
+	vec3 omega = vec3(0); //magyar neve: szögsebesség
 
 public:
+	bool stationary = true;
+
 	BuoyCube(const vec3& pos, float sideLength, int voxelCount, float mass) : a(sideLength), numOfVoxels(voxelCount), m(mass), Movable(pos) {
 		vec3 bottomCorner = vec3(-1, -1, -1) * (sideLength / 2.0f);
 		float voxelSize = sideLength / (float)voxelCount;
@@ -639,23 +644,55 @@ public:
 			}
 		}
 
-		invI = IDENTITY3D * (6.0f / (m * a * a));
+		invI = mat3(6.0f / (m * a * a));
 	}
 
-	// Inherited via PhysicsObject
 	void Simulate(float dt) override {
-		vec3 force(0);
+		vec3 bouyantForce(0);
 		vec3 torque(0);
+
+		mat4 Model = M();
 
 		for (const BuoyVoxel& bouyVoxel : voxels) {
 			vec3 buoyForce(0);
 			vec3 buoyTorque(0);
 
-			bouyVoxel.simulate(M(), buoyForce, buoyTorque);
+			bouyVoxel.simulate(Model, position, buoyForce, buoyTorque, stationary);
 
-			force += buoyForce;
+			bouyantForce += buoyForce;
 			torque += buoyTorque;
 		}
+		vec3 totalForce = bouyantForce - vec3(0, m * g, 0);
+
+		vec3 acc = totalForce / m;
+		v += acc * dt;
+		v *= 0.985f;
+		position += v * dt;
+
+		mat3 wInvI = rotation.toRotationMatrix3D() * invI * transpose(rotation.toRotationMatrix3D());
+		vec3 alpha = wInvI * torque;
+		omega += alpha * dt; 
+		omega *= 0.98f;
+		Quaternion q = Quaternion(0, omega.x, omega.y, omega.z);
+		rotation = rotation + (q * rotation) * 0.5f * dt;
+		rotation.normalize();
+	}
+};
+
+class Teapot : public BuoyCube, public OBJSurface {
+	Material* material;
+public:
+	static PhongShader* shader;
+
+	Teapot(const vec3& pos) : BuoyCube(pos, 2.0f, 8, 4500), OBJSurface("Teapot.obj", 1.0f) {
+		material = new Material(vec3(0.3f, 0.3f, 0.3f), vec3(0, 0, 0), 200.0f);
+	}
+
+	void Draw(RenderState state) override {
+		SetModelingTransformation(state);
+		state.material = material;
+		shader->Bind(state);
+		OBJSurface::Draw(state);
 	}
 };
 
@@ -686,6 +723,7 @@ public:
 class Scene {
 	int current = 0;
 	WaterSurface* surface;
+	std::vector<Teapot*> teapots;
 	Light light;
 	Camera* camera;
 public:
@@ -696,12 +734,18 @@ public:
 		vec3 Le(2, 2, 2), La(0.4f, 0.4f, 0.4f);
 		light = Light(La, Le, lightDirection);
 
-		vec3 eye = vec3(15, 15, 15), vup = vec3(0, 1, 0), lookat = vec3(5, 0, 5);
+		vec3 eye = vec3(40, 40, 40), vup = vec3(0, 1, 0), lookat = vec3(20, 0, 20);
 		float fov = 45 * (float)M_PI / 180;
 		camera->set(eye, lookat, vup, fov);
 
 		Material* waterMock = new Material(vec3(0.0f, 0.05f, 0.1f), vec3(0.8f, 0.9f, 1.0f), 200.0f);
-		surface = new WaterSurface(10, 10, vec3(-2.5f, -0.5f, -2.5f), waterMock);
+		surface = new WaterSurface(40, 40, vec3(), waterMock);
+
+		teapots.push_back(new Teapot(vec3(20, 2, 20)));
+		teapots.push_back(new Teapot(vec3(15, 2, 15)));
+		teapots.push_back(new Teapot(vec3(25, 2, 25)));
+		teapots.push_back(new Teapot(vec3(10, 2, 30)));
+		teapots.push_back(new Teapot(vec3(20, 2, 30)));
 	}
 
 	void Render() {
@@ -711,18 +755,31 @@ public:
 		state.P = camera->P();
 		state.light = light;
 		surface->Draw(state);
+		for (Teapot* teapot : teapots) {
+			teapot->Draw(state);
+		}
 	}
 
 	void Animate(float dt) {
 		surface->Animate(dt);
+		for (Teapot* teapot : teapots) {
+			teapot->Simulate(dt);
+		}
 	}
 
 	void RoateCamera(float dt) {
 		camera->Animate(dt);
 	}
+
+	void UnfreezeObjects() {
+		for (Teapot* teapot : teapots) {
+			teapot->stationary = false;
+		}
+	}
 };
 
 WaterShader* WaterSurface::shader;
+PhongShader* Teapot::shader;
 
 class Waterloo : public glApp {
 	Scene* scene;
@@ -733,6 +790,7 @@ public:
 	void onInitialization() {
 		std::srand(time(NULL));
 		WaterSurface::shader = new WaterShader;
+		Teapot::shader = new PhongShader;
 
 		glEnable(GL_DEPTH_TEST);
 		glDisable(GL_CULL_FACE);
@@ -760,15 +818,22 @@ public:
 			scene->RoateCamera(M_PI / 40.0f);
 			refreshScreen();
 			break;
+		case ' ':
+			scene->UnfreezeObjects();
+			break;
 		default:
 			break;
 		}
 	}
 
 	void onTimeElapsed(float startTime, float endTime) {
-		float dt = startTime - endTime;
-		scene->Animate(dt);
-		//scene->RoateCamera(dt / 10);
+		float dt = endTime - startTime;
+		const float minDelta = 0.01f;
+
+		for (float t = startTime; t < endTime; t += minDelta) {
+			float timeDelta = fmin(minDelta, dt);
+			scene->Animate(timeDelta);
+		}
 		refreshScreen();
 	}
 };
