@@ -647,6 +647,25 @@ public:
 		invI = mat3(6.0f / (m * a * a));
 	}
 
+	void Collide(BuoyCube& other) {
+		float r1 = a * 0.75f;
+		float r2 = other.a * 0.75f;
+
+		vec3 dir = position - other.position;
+		float distance = length(dir);
+
+		if (distance >= r1 + r2)
+			return;
+
+		dir = normalize(dir);
+		
+		float vAlongDir1 = dot(v, dir);
+		float vAlongDir2 = dot(other.v, dir);
+		
+		v += (vAlongDir2 - vAlongDir1) * dir;
+		other.v += (vAlongDir1 - vAlongDir2) * dir;
+	}
+
 	void Simulate(float dt) override {
 		vec3 bouyantForce(0);
 		vec3 torque(0);
@@ -764,6 +783,12 @@ public:
 		surface->Animate(dt);
 		for (Teapot* teapot : teapots) {
 			teapot->Simulate(dt);
+		}
+
+		for (size_t i = 0; i < teapots.size(); i++) {
+			for (size_t j = i + 1; j < teapots.size(); j++) {
+				teapots[i]->Collide(*teapots[j]);
+			}
 		}
 	}
 
