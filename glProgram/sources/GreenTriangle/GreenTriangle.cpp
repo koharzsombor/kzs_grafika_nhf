@@ -492,7 +492,7 @@ public:
 	ParamSurface() { nVtxPerStrip = nStrips = 0; }
 	virtual VtxData GenVertexData(float u, float v) = 0;
 
-	void create(int N = 500, int M = 500) {
+	void create(int N = 200, int M = 200) {
 		nVtxPerStrip = (M + 1) * 2;
 		nStrips = N;
 		for (int i = 0; i < N; i++) {
@@ -703,7 +703,7 @@ class Teapot : public BuoyCube, public OBJSurface {
 public:
 	static PhongShader* shader;
 
-	Teapot(const vec3& pos) : BuoyCube(pos, 2.0f, 8, 4500), OBJSurface("Teapot.obj", 1.0f) {
+	Teapot(const vec3& pos) : BuoyCube(pos, 2.0f, 4, 4500), OBJSurface("Teapot.obj", 1.0f) {
 		material = new Material(vec3(0.3f, 0.3f, 0.3f), vec3(0, 0, 0), 200.0f);
 	}
 
@@ -753,18 +753,18 @@ public:
 		vec3 Le(2, 2, 2), La(0.4f, 0.4f, 0.4f);
 		light = Light(La, Le, lightDirection);
 
-		vec3 eye = vec3(40, 40, 40), vup = vec3(0, 1, 0), lookat = vec3(20, 0, 20);
+		vec3 eye = vec3(70, 40, 40), vup = vec3(0, 1, 0), lookat = vec3(40, 0, 40);
 		float fov = 45 * (float)M_PI / 180;
 		camera->set(eye, lookat, vup, fov);
 
 		Material* waterMock = new Material(vec3(0.0f, 0.05f, 0.1f), vec3(0.8f, 0.9f, 1.0f), 200.0f);
-		surface = new WaterSurface(40, 40, vec3(), waterMock);
+		surface = new WaterSurface(80, 80, vec3(), waterMock);
 
-		teapots.push_back(new Teapot(vec3(20, 2, 20)));
-		teapots.push_back(new Teapot(vec3(15, 2, 15)));
-		teapots.push_back(new Teapot(vec3(25, 2, 25)));
-		teapots.push_back(new Teapot(vec3(10, 2, 30)));
-		teapots.push_back(new Teapot(vec3(20, 2, 30)));
+		teapots.push_back(new Teapot(vec3(40, 2, 40)));
+		teapots.push_back(new Teapot(vec3(35, 2, 35)));
+		teapots.push_back(new Teapot(vec3(45, 2, 45)));
+		teapots.push_back(new Teapot(vec3(30, 2, 50)));
+		teapots.push_back(new Teapot(vec3(40, 2, 50)));
 	}
 
 	void Render() {
